@@ -6,6 +6,33 @@ import axios, {
 import { config } from "@config/env";
 import type { ApiError } from "@/types";
 
+/**
+ * Error thrown by the API client that preserves the backend's structured
+ * response. The old interceptor flattened every failure to `new Error(message)`,
+ * discarding `status` and the `details` payload — so callers could never react
+ * to a specific conflict (e.g. the nearby-marker 409 carries the existing
+ * marker's id/name/distance). Extends Error, so existing `err.message` handling
+ * keeps working unchanged.
+ */
+export class ApiRequestError extends Error {
+    readonly status?: number;
+    /** Machine-readable backend code, e.g. "NEARBY_MARKER". */
+    readonly code?: string;
+    /** The backend `details` object (structured payload), if any. */
+    readonly details?: Record<string, unknown>;
+
+    constructor(
+        message: string,
+        opts: { status?: number; code?: string; details?: Record<string, unknown> } = {}
+    ) {
+        super(message);
+        this.name = "ApiRequestError";
+        this.status = opts.status;
+        this.code = opts.code;
+        this.details = opts.details;
+    }
+}
+
 const AUTH_TOKEN_KEY = "seekkrr_creator_access_token"; // Distinct key for creator portal
 const REFRESH_TOKEN_KEY = "seekkrr_creator_refresh_token";
 
@@ -76,7 +103,17 @@ function createApiClient(): AxiosInstance {
                 error.message ||
                 "An unexpected error occurred";
 
-            return Promise.reject(new Error(errorMessage));
+            // `details` is only a structured payload when it's an object (V2
+            // AppError). The string case above is a V1 message, not a payload.
+            const details =
+                responseData?.details && typeof responseData.details === "object"
+                    ? (responseData.details as Record<string, unknown>)
+                    : undefined;
+            const code = typeof responseData?.error === "string" ? responseData.error : undefined;
+
+            return Promise.reject(
+                new ApiRequestError(errorMessage, { status, code, details })
+            );
         }
     );
 

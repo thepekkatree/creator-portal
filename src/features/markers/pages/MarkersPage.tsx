@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { MoreVertical, AlertTriangle, Plus, MapPin } from "lucide-react";
+import { MoreVertical, AlertTriangle, Plus, MapPin, Eye } from "lucide-react";
 import { Card, Button, Input, Badge, EmptyState, ErrorState, SkeletonTableRows, SearchBar, StatusFilterPills } from "@components/ui";
 import { markerService } from "@services/marker.service";
 import { useAuthStore } from "@store/auth.store";
@@ -290,7 +290,9 @@ export function MarkersPage() {
                                     return (
                                         <tr
                                             key={marker.id}
-                                            className="hover:bg-neutral-50/50 transition-colors"
+                                            onClick={() => navigate(`/creator/markers/view/${marker.id}`)}
+                                            className="hover:bg-neutral-50/50 transition-colors cursor-pointer"
+                                            title="View marker details"
                                         >
                                             <td
                                                 className="py-4 px-6 font-medium text-neutral-900 truncate max-w-[200px]"
@@ -319,7 +321,19 @@ export function MarkersPage() {
                                                     : "—"}
                                             </td>
                                             <td className="py-4 px-6 text-right relative">
-                                                <div className="flex items-center justify-end">
+                                                <div className="flex items-center justify-end gap-1">
+                                                    <Button
+                                                        variant="ghost"
+                                                        aria-label={`View ${title}`}
+                                                        title="View marker details"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            navigate(`/creator/markers/view/${marker.id}`);
+                                                        }}
+                                                        className="p-2 h-9 w-9 border border-transparent rounded-lg flex items-center justify-center text-neutral-400 hover:text-primary-600 hover:bg-primary-50 transition-colors"
+                                                    >
+                                                        <Eye className="w-4 h-4" />
+                                                    </Button>
                                                     <div className="relative">
                                                         <Button
                                                             variant="ghost"

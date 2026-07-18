@@ -418,10 +418,14 @@ export function MapComponent({
         }
     }, [regionBbox, styleReady, drawRegionBbox]);
 
-    // Update markers when they change
+    // Add/refresh markers when they change AND once the map's style is ready.
+    // The map inits lazily (IntersectionObserver), so on first render mapRef is
+    // still null; without the styleReady dependency a static marker set (e.g. the
+    // marker detail page) would never get drawn because addMarkers's identity
+    // doesn't change after init. styleReady bumps on style.load → re-runs this.
     useEffect(() => {
         if (mapRef.current) addMarkers();
-    }, [addMarkers]);
+    }, [addMarkers, styleReady]);
 
     return (
         <div className="relative group">

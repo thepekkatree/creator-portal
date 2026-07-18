@@ -1,18 +1,28 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { X, Upload, Loader2, AlertTriangle } from "lucide-react";
-import { Card, Button, Input, Textarea } from "@components/ui";
+import { X, Upload, Loader2, AlertTriangle, ExternalLink, MapPin } from "lucide-react";
+import { Card, Button, Input, Textarea, InfoHint } from "@components/ui";
 import { markerService } from "@services/marker.service";
+import { ApiRequestError } from "@services/api";
 import { cloudinaryService } from "@services/cloudinary.service";
 import { MarkerMapPicker } from "./MarkerMapPicker";
-import type { LngLat } from "./MarkerMapPicker";
+import type { LngLat, ResolvedPlace } from "./MarkerMapPicker";
 import { MarkerRegionSelect } from "./MarkerRegionSelect";
 import { markerFormSchema, toCreatePayload, toUpdatePayload, MARKER_CATEGORIES } from "../schemas/marker.schema";
 import type { MarkerFormData } from "../schemas/marker.schema";
-import type { Marker } from "@/types";
+import type { Marker, CreateMarkerPayload } from "@/types";
+
+/** Details the backend returns with a 409 NEARBY_MARKER conflict. */
+interface NearbyConflict {
+    existing_marker_id: string;
+    existing_title?: string;
+    existing_category?: string;
+    distance_m?: number;
+}
 
 /**
  * Normalize a stored time value to the `HH:MM` the form expects. The backend
@@ -24,6 +34,34 @@ function toHHMM(v: string | null | undefined): string {
     if (!v) return "";
     const time = v.includes("T") ? (v.split("T")[1] ?? "") : v;
     return time.slice(0, 5);
+}
+
+/**
+ * The Google Maps link for a pin. Mirrors the backend's fallback in
+ * MarkerService.create_marker so what the creator sees before saving is exactly
+ * what gets stored.
+ */
+function googleMapsUrl(lat: number, lng: number): string {
+    return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+}
+
+/**
+ * Best-effort map from a Mapbox POI category to our marker category enum.
+ * Mapbox returns free-form strings like "restaurant" / "coffee_shop" / "hotel";
+ * anything we don't recognise is left for the creator to pick.
+ */
+function toMarkerCategory(mapboxCategory?: string): MarkerFormData["category"] | undefined {
+    if (!mapboxCategory) return undefined;
+    const c = mapboxCategory.toLowerCase();
+    const match = (...needles: string[]) => needles.some((n) => c.includes(n));
+
+    if (match("coffee", "cafe", "tea", "bakery")) return "Cafes";
+    if (match("restaurant", "food", "bar", "pub", "dining", "eat")) return "Restaurants";
+    if (match("hotel", "lodging", "motel", "hostel", "resort", "guest_house", "campground")) return "Stays";
+    if (match("shop", "store", "retail", "mall", "market", "boutique")) return "Shops";
+    if (match("museum", "monument", "historic", "landmark", "viewpoint", "tourist", "attraction", "temple", "church", "mosque", "fort", "palace")) return "Touristy";
+    if (match("park", "trail", "sport", "gym", "entertainment", "cinema", "theme", "adventure", "climb", "zoo")) return "Activities";
+    return undefined;
 }
 
 interface MarkerFormModalProps {
@@ -84,6 +122,9 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
     const [uploadingMedia, setUploadingMedia] = useState(false);
     const [uploadingTtdImage, setUploadingTtdImage] = useState(false);
     const [hidden, setHidden] = useState<boolean>(initial?.hidden ?? false);
+    // Nearby-marker conflict (409) awaiting the creator's confirm-or-cancel.
+    const [nearbyConflict, setNearbyConflict] = useState<NearbyConflict | null>(null);
+    const [pendingPayload, setPendingPayload] = useState<CreateMarkerPayload | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const ttdImageInputRef = useRef<HTMLInputElement>(null);
 
@@ -139,11 +180,21 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
         setValue,
         watch,
         reset,
-        formState: { errors, isSubmitting },
+        getValues,
+        formState: { errors, isSubmitting, dirtyFields },
     } = useForm<MarkerFormData>({
         resolver: zodResolver(markerFormSchema),
         defaultValues: DEFAULT_VALUES,
     });
+
+    // Lock background scroll while the modal is open (matches other portal
+    // modals) so only the modal scrolls, not the page behind it.
+    useEffect(() => {
+        if (!open) return;
+        const original = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        return () => { document.body.style.overflow = original; };
+    }, [open]);
 
     // Prefill when editing or reset when creating
     useEffect(() => {
@@ -160,10 +211,58 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
 
     const longitude = watch("longitude");
     const latitude = watch("latitude");
+    const mapUrl = watch("map_url");
     const tags = watch("tags");
     const media = watch("media");
     const thingsToDoImage = watch("things_to_do_image_url");
     const regionId = watch("region_id");
+
+    /**
+     * Move the pin → keep the location-derived fields in step with it.
+     *
+     * `map_url` is always rewritten from the new coordinates unless the creator
+     * typed their own link (a hand-picked Google place URL is better than our
+     * generated one, so we never clobber it).
+     */
+    const syncLocationFields = useCallback(
+        (lng: number, lat: number) => {
+            setValue("longitude", lng, { shouldValidate: true });
+            setValue("latitude", lat, { shouldValidate: true });
+            if (!dirtyFields.map_url) {
+                setValue("map_url", googleMapsUrl(lat, lng), { shouldValidate: true });
+            }
+        },
+        [setValue, dirtyFields.map_url]
+    );
+
+    /**
+     * Mapbox told us what's under the pin — fill the blanks so the creator only
+     * has to review, not retype. Anything they've already edited is left alone.
+     */
+    const handlePlace = useCallback(
+        (place: ResolvedPlace) => {
+            const filled: string[] = [];
+
+            if (place.address && !dirtyFields.address) {
+                setValue("address", place.address, { shouldValidate: true });
+                filled.push("address");
+            }
+            if (place.place_name && !getValues("title")?.trim()) {
+                setValue("title", place.place_name, { shouldValidate: true });
+                filled.push("title");
+            }
+            const category = toMarkerCategory(place.category);
+            if (category && !getValues("category")) {
+                setValue("category", category, { shouldValidate: true });
+                filled.push("category");
+            }
+
+            if (filled.length > 0) {
+                toast.success(`Filled in ${filled.join(", ")} — edit anything that looks off.`);
+            }
+        },
+        [setValue, getValues, dirtyFields.address]
+    );
 
     const createMutation = useMutation({
         mutationFn: (payload: ReturnType<typeof toCreatePayload>) =>
@@ -175,21 +274,49 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
             markerService.updateMarker(id, payload),
     });
 
+    /**
+     * Create a marker, surfacing the nearby-marker conflict as a confirm dialog
+     * rather than a dead-end error. On a 409 NEARBY_MARKER we stash the payload
+     * and the existing marker's details; "Create anyway" replays this with
+     * confirm_nearby=true.
+     */
+    const doCreate = async (payload: CreateMarkerPayload) => {
+        try {
+            const marker = await createMutation.mutateAsync(payload);
+            setNearbyConflict(null);
+            setPendingPayload(null);
+            toast.success("Marker created!");
+            onSaved(marker);
+            onClose();
+        } catch (err) {
+            if (
+                err instanceof ApiRequestError &&
+                err.status === 409 &&
+                err.code === "NEARBY_MARKER" &&
+                err.details?.existing_marker_id
+            ) {
+                const d = err.details;
+                setNearbyConflict({
+                    existing_marker_id: String(d.existing_marker_id),
+                    existing_title: typeof d.existing_title === "string" ? d.existing_title : undefined,
+                    existing_category: typeof d.existing_category === "string" ? d.existing_category : undefined,
+                    distance_m: typeof d.distance_m === "number" ? d.distance_m : undefined,
+                });
+                setPendingPayload(payload);
+                return; // handled by the confirm dialog — no error toast
+            }
+            toast.error(err instanceof Error ? err.message : "Failed to create marker");
+        }
+    };
+
+    const confirmCreateAnyway = () => {
+        if (!pendingPayload) return;
+        void doCreate({ ...pendingPayload, confirm_nearby: true });
+    };
+
     const onSubmit = async (data: MarkerFormData) => {
         if (mode === "create") {
-            try {
-                const promise = createMutation.mutateAsync({ ...toCreatePayload(data), hidden });
-                toast.promise(promise, {
-                    loading: "Creating marker…",
-                    success: "Marker created!",
-                    error: "Failed to create marker",
-                });
-                const marker = await promise;
-                onSaved(marker);
-                onClose();
-            } catch {
-                // error handled by toast; keep modal open
-            }
+            await doCreate({ ...toCreatePayload(data), hidden });
         } else {
             if (!initial?.id) return;
             try {
@@ -222,8 +349,10 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
             const results = await Promise.all(uploads);
             const newUrls = results.map((r) => r.secure_url);
             setValue("media", [...(media ?? []), ...newUrls]);
-        } catch {
-            toast.error("Failed to upload image");
+        } catch (err) {
+            // Surface what actually went wrong — a swallowed reason ("Failed to
+            // upload image") leaves the creator with nothing to act on.
+            toast.error(err instanceof Error ? err.message : "Failed to upload image");
         } finally {
             setUploadingMedia(false);
             if (fileInputRef.current) fileInputRef.current.value = "";
@@ -241,8 +370,8 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
         try {
             const result = await cloudinaryService.uploadImage(file, { folder: "markers/things-to-do" });
             setValue("things_to_do_image_url", result.secure_url, { shouldValidate: true });
-        } catch {
-            toast.error("Failed to upload image");
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Failed to upload image");
         } finally {
             setUploadingTtdImage(false);
             if (ttdImageInputRef.current) ttdImageInputRef.current.value = "";
@@ -278,10 +407,10 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
     const isBusy = isSubmitting || createMutation.isPending || updateMutation.isPending;
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-start justify-center p-4 bg-neutral-900/60 backdrop-blur-sm animate-fade-in overflow-y-auto">
-            <Card className="w-full max-w-3xl my-8 shadow-2xl border-neutral-200 overflow-hidden animate-scale-up">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-neutral-900/60 backdrop-blur-sm animate-fade-in">
+            <Card className="w-full max-w-3xl shadow-2xl border-neutral-200 overflow-hidden animate-scale-up max-h-[90vh] flex flex-col">
                 {/* Header */}
-                <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-200 bg-white sticky top-0 z-10">
+                <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-200 bg-white shrink-0">
                     <h2 className="text-xl font-bold text-neutral-900">
                         {mode === "create" ? "Create New Marker" : "Edit Marker"}
                     </h2>
@@ -294,9 +423,55 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
                     </button>
                 </div>
 
-                <form onSubmit={handleSubmit(onSubmit)} noValidate>
-                    <div className="p-6 space-y-5 bg-neutral-50">
+                <form onSubmit={handleSubmit(onSubmit)} noValidate className="flex-1 flex flex-col min-h-0">
+                    <div className="p-6 space-y-5 bg-neutral-50 overflow-y-auto flex-1">
 
+                        {/* ── Section: Location ── */}
+                        <section className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
+                            <h3 className="text-sm font-semibold text-neutral-500 uppercase tracking-wider mb-3">
+                                Location {mode === "create" && <span className="text-red-500">*</span>}
+                            </h3>
+                            {mode === "edit" && (
+                                <p className="text-xs text-amber-600 mb-2 flex items-center gap-1">
+                                    <AlertTriangle className="w-3 h-3" />
+                                    Location cannot be changed after creation.
+                                </p>
+                            )}
+                            <MarkerMapPicker
+                                value={
+                                    longitude !== undefined && latitude !== undefined
+                                        ? { lng: longitude, lat: latitude }
+                                        : null
+                                }
+                                onChange={({ lng, lat }) => syncLocationFields(lng, lat)}
+                                onPlace={handlePlace}
+                                defaultCenter={smartDefaultCenter}
+                            />
+                            {errors.longitude && (
+                                <p className="mt-1 text-xs text-red-600 flex items-center gap-1">
+                                    <AlertTriangle className="w-3 h-3" /> {errors.longitude.message}
+                                </p>
+                            )}
+                            {errors.latitude && !errors.longitude && (
+                                <p className="mt-1 text-xs text-red-600 flex items-center gap-1">
+                                    <AlertTriangle className="w-3 h-3" /> {errors.latitude.message}
+                                </p>
+                            )}
+
+                            <div className="mt-4">
+                                <label className="block text-sm font-medium text-neutral-700 mb-1">
+                                    Region
+                                </label>
+                                <MarkerRegionSelect
+                                    value={regionId ?? ""}
+                                    onChange={(id) => setValue("region_id", id, { shouldValidate: true })}
+                                />
+                                <p className="mt-1 text-xs text-neutral-400">
+                                    Auto-detected from the pin. Search only to attach a different region.
+                                </p>
+                            </div>
+                        </section>
+                        
                         {/* ── Section: Basic Info ── */}
                         <section className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
                             <h3 className="text-sm font-semibold text-neutral-500 uppercase tracking-wider mb-3">
@@ -357,54 +532,6 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
                             </div>
                         </section>
 
-                        {/* ── Section: Location ── */}
-                        <section className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
-                            <h3 className="text-sm font-semibold text-neutral-500 uppercase tracking-wider mb-3">
-                                Location {mode === "create" && <span className="text-red-500">*</span>}
-                            </h3>
-                            {mode === "edit" && (
-                                <p className="text-xs text-amber-600 mb-2 flex items-center gap-1">
-                                    <AlertTriangle className="w-3 h-3" />
-                                    Location cannot be changed after creation.
-                                </p>
-                            )}
-                            <MarkerMapPicker
-                                value={
-                                    longitude !== undefined && latitude !== undefined
-                                        ? { lng: longitude, lat: latitude }
-                                        : null
-                                }
-                                onChange={({ lng, lat }) => {
-                                    setValue("longitude", lng, { shouldValidate: true });
-                                    setValue("latitude", lat, { shouldValidate: true });
-                                }}
-                                defaultCenter={smartDefaultCenter}
-                            />
-                            {errors.longitude && (
-                                <p className="mt-1 text-xs text-red-600 flex items-center gap-1">
-                                    <AlertTriangle className="w-3 h-3" /> {errors.longitude.message}
-                                </p>
-                            )}
-                            {errors.latitude && !errors.longitude && (
-                                <p className="mt-1 text-xs text-red-600 flex items-center gap-1">
-                                    <AlertTriangle className="w-3 h-3" /> {errors.latitude.message}
-                                </p>
-                            )}
-
-                            <div className="mt-4">
-                                <label className="block text-sm font-medium text-neutral-700 mb-1">
-                                    Region
-                                </label>
-                                <MarkerRegionSelect
-                                    value={regionId ?? ""}
-                                    onChange={(id) => setValue("region_id", id, { shouldValidate: true })}
-                                />
-                                <p className="mt-1 text-xs text-neutral-400">
-                                    Attach this marker to an existing SeekKrr region (optional).
-                                </p>
-                            </div>
-                        </section>
-
                         {/* ── Section: Contact & URLs ── */}
                         <section className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
                             <h3 className="text-sm font-semibold text-neutral-500 uppercase tracking-wider mb-3">
@@ -414,8 +541,9 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
                                 <div>
                                     <label className="block text-sm font-medium text-neutral-700 mb-1">
                                         Address
+                                        <InfoHint text="Filled in automatically from the map pin. Edit it freely — your text is kept and never overwritten once you change it." />
                                     </label>
-                                    <Input {...register("address")} placeholder="Street address…" />
+                                    <Input {...register("address")} placeholder="Auto-filled from the map pin…" />
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-neutral-700 mb-1">
@@ -439,12 +567,28 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
                                 <div>
                                     <label className="block text-sm font-medium text-neutral-700 mb-1">
                                         Map URL
+                                        <InfoHint text="Generated from the map pin automatically. Open in Google Maps to check it, or paste your own Google Maps place link here — once you edit it we stop overwriting it." />
                                     </label>
-                                    <Input
-                                        {...register("map_url")}
-                                        placeholder="https://maps.google.com/…"
-                                        className={errors.map_url ? "border-red-400" : ""}
-                                    />
+                                    <div className="flex gap-2">
+                                        <Input
+                                            {...register("map_url")}
+                                            placeholder="Auto-filled from the map pin…"
+                                            className={`flex-1 ${errors.map_url ? "border-red-400" : ""}`}
+                                        />
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            disabled={!mapUrl}
+                                            onClick={() => {
+                                                if (mapUrl) window.open(mapUrl, "_blank", "noopener,noreferrer");
+                                            }}
+                                            leftIcon={<ExternalLink className="w-4 h-4" />}
+                                            title="Open this location in Google Maps"
+                                        >
+                                            Open
+                                        </Button>
+                                    </div>
                                     {errors.map_url && (
                                         <p className="mt-1 text-xs text-red-600">{errors.map_url.message}</p>
                                     )}
@@ -664,7 +808,7 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
                     </div>
 
                     {/* Footer */}
-                    <div className="flex gap-3 px-6 py-4 border-t border-neutral-200 bg-neutral-50">
+                    <div className="flex gap-3 px-6 py-4 border-t border-neutral-200 bg-neutral-50 shrink-0">
                         <Button
                             type="button"
                             variant="ghost"
@@ -692,6 +836,84 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
                 <div className="fixed inset-0 z-[110] flex items-center justify-center bg-neutral-900/30">
                     <Loader2 className="w-8 h-8 text-primary-600 animate-spin" />
                 </div>
+            )}
+
+            {/* Nearby-marker confirmation — a marker already exists within 20m.
+                Portaled to <body> so it escapes this modal's backdrop-blur
+                containing block (otherwise a nested fixed element is trapped
+                inside the scrollable parent and mispositions). */}
+            {nearbyConflict && createPortal(
+                <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-neutral-900/60 backdrop-blur-sm animate-fade-in">
+                    <Card className="w-full max-w-md shadow-2xl overflow-hidden animate-scale-up">
+                        <div className="p-6">
+                            <div className="flex items-start gap-3">
+                                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
+                                    <MapPin className="w-5 h-5 text-amber-600" />
+                                </div>
+                                <div className="flex-1">
+                                    <h3 className="text-lg font-bold text-neutral-900">
+                                        A marker already exists here
+                                    </h3>
+                                    <p className="mt-1 text-sm text-neutral-600">
+                                        <span className="font-semibold text-neutral-900">
+                                            {nearbyConflict.existing_title || "An existing marker"}
+                                        </span>
+                                        {nearbyConflict.existing_category ? ` (${nearbyConflict.existing_category})` : ""}
+                                        {" is "}
+                                        {nearbyConflict.distance_m !== undefined && nearbyConflict.distance_m !== null
+                                            ? `~${nearbyConflict.distance_m}m`
+                                            : "right"}
+                                        {" away. If this is the same place, cancel and use the existing marker to avoid duplicates. Only create a new one if it's genuinely different (e.g. two shops in the same building)."}
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="mt-5 space-y-2">
+                                <Button
+                                    type="button"
+                                    variant="primary"
+                                    fullWidth
+                                    isLoading={createMutation.isPending}
+                                    disabled={createMutation.isPending}
+                                    onClick={confirmCreateAnyway}
+                                >
+                                    Yes, create a new marker
+                                </Button>
+                                <div className="flex gap-2">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        fullWidth
+                                        disabled={createMutation.isPending}
+                                        leftIcon={<ExternalLink className="w-4 h-4" />}
+                                        onClick={() =>
+                                            window.open(
+                                                `/creator/markers/view/${nearbyConflict.existing_marker_id}`,
+                                                "_blank",
+                                                "noopener,noreferrer"
+                                            )
+                                        }
+                                    >
+                                        View existing
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        fullWidth
+                                        disabled={createMutation.isPending}
+                                        onClick={() => {
+                                            setNearbyConflict(null);
+                                            setPendingPayload(null);
+                                        }}
+                                    >
+                                        Cancel
+                                    </Button>
+                                </div>
+                            </div>
+                        </div>
+                    </Card>
+                </div>,
+                document.body
             )}
         </div>
     );

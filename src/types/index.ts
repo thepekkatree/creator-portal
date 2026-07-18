@@ -553,6 +553,8 @@ export interface CreateMarkerPayload {
     region_id?: string;
     properties?: Record<string, unknown>;
     hidden?: boolean;
+    /** Proceed even if a marker exists within 20m (distinct place at the same spot). */
+    confirm_nearby?: boolean;
 }
 
 /** Body for `PUT /markers/{id}` (UpdateMarkerBody) — location is immutable; region_id

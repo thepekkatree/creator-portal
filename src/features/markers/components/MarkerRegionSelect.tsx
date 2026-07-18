@@ -1,23 +1,24 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Search, MapPinned, X } from "lucide-react";
+import { ChevronDown, Search, MapPinned } from "lucide-react";
 import { regionService } from "@services/region.service";
 
 interface MarkerRegionSelectProps {
-    /** Selected region id ("" = no region). */
+    /** Selected region id. */
     value: string;
     onChange: (regionId: string) => void;
 }
 
 /**
  * Searchable region picker backed by the SeekKrr region search endpoint
- * (GET /api/v2/regions/search). Lets a creator attach a marker to an existing
- * region. Includes a "No region" option to clear the selection.
+ * (GET /api/v2/regions/search). The region is auto-assigned from the marker's
+ * pin on the backend; this picker is a manual override to attach a different
+ * existing region. There is no "clear" option — a marker is always tied to the
+ * region its coordinates fall in.
  */
 export function MarkerRegionSelect({ value, onChange }: MarkerRegionSelectProps) {
     const [isOpen, setIsOpen] = useState(false);
     const [search, setSearch] = useState("");
-    const [noRegionExplicit, setNoRegionExplicit] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
     // The search endpoint requires a non-empty query (returns 422 for q=""),
@@ -58,11 +59,6 @@ export function MarkerRegionSelect({ value, onChange }: MarkerRegionSelectProps)
         onChange(regionId);
         setIsOpen(false);
         setSearch("");
-        if (regionId === "") {
-            setNoRegionExplicit(true);
-        } else {
-            setNoRegionExplicit(false);
-        }
     };
 
     return (
@@ -72,19 +68,14 @@ export function MarkerRegionSelect({ value, onChange }: MarkerRegionSelectProps)
                 onClick={() => setIsOpen((o) => !o)}
                 className="w-full flex items-center justify-between px-4 py-2.5 bg-white border border-neutral-300 rounded-lg text-left transition-colors focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-500"
             >
-                <span className={`flex items-center gap-2 text-sm ${(value || noRegionExplicit) ? "text-neutral-900" : "text-neutral-400"}`}>
+                <span className={`flex items-center gap-2 text-sm ${value ? "text-neutral-900" : "text-neutral-400"}`}>
                     {value ? (
                         <>
                             <MapPinned className="w-4 h-4 text-primary-500 shrink-0" />
                             <span className="truncate">{displayName ?? "Loading region…"}</span>
                         </>
-                    ) : noRegionExplicit ? (
-                        <span className="flex items-center gap-2 text-neutral-600">
-                            <X className="w-4 h-4 text-neutral-400 shrink-0" />
-                            No region
-                        </span>
                     ) : (
-                        "Search & select a region…"
+                        "Auto-detected from the pin — search to override"
                     )}
                 </span>
                 <ChevronDown className={`w-4 h-4 text-neutral-400 shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`} />
@@ -106,16 +97,6 @@ export function MarkerRegionSelect({ value, onChange }: MarkerRegionSelectProps)
                         </div>
                     </div>
                     <ul className="max-h-52 overflow-y-auto py-1">
-                        <li>
-                            <button
-                                type="button"
-                                onClick={() => handleSelect("")}
-                                className={`w-full text-left px-4 py-2.5 text-sm flex items-center gap-2 hover:bg-neutral-50 transition-colors ${value === "" ? "text-primary-700 font-medium" : "text-neutral-500"}`}
-                            >
-                                <X className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
-                                No region
-                            </button>
-                        </li>
                         {isLoading ? (
                             <li className="px-4 py-3 text-sm text-neutral-500 text-center">Loading…</li>
                         ) : regions.length === 0 ? (

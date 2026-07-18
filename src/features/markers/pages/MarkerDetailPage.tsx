@@ -157,9 +157,14 @@ export function MarkerDetailPage() {
                     <MapComponent
                         center={{ lng, lat }}
                         zoom={15}
-                        markers={[{ longitude: lng, latitude: lat }]}
-                        interactive={false}
-                        height="280px"
+                        markers={[{
+                            longitude: lng,
+                            latitude: lat,
+                            place_name: marker.title,
+                            address: marker.address ?? undefined,
+                        }]}
+                        interactive={true}
+                        height="320px"
                         preview={true}
                     />
                     <div className="px-6 py-3 text-xs text-neutral-400">

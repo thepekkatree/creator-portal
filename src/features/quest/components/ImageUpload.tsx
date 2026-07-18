@@ -37,12 +37,9 @@ export function ImageUpload({
             setProgress(0);
             setError(null);
 
-            // Validate file size (max 10MB)
-            if (file.size > 10 * 1024 * 1024) {
-                setError("Image size must be less than 10MB");
-                setIsUploading(false); // Reset uploading state if validation fails
-                return;
-            }
+            // No size cap: cloudinaryService.uploadImage downscales oversized
+            // photos (phone shots are routinely 8-15MB) before upload, so a hard
+            // limit here would only reject files that would otherwise succeed.
 
             try {
                 const result = await cloudinaryService.uploadImage(file, {
@@ -215,7 +212,7 @@ export function ImageUpload({
                                 <p className="text-sm font-medium text-neutral-700 mb-1">
                                     {dragActive ? "Drop image here" : "Click or drag to upload"}
                                 </p>
-                                <p className="text-xs text-neutral-500">PNG, JPG up to 10MB</p>
+                                <p className="text-xs text-neutral-500">PNG or JPG — large photos are optimized automatically</p>
                             </>
                         )}
                     </div>

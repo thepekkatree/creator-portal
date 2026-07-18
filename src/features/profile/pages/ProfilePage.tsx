@@ -242,10 +242,7 @@ export function ProfilePage() {
       toast.error("Please choose an image file.");
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("Image must be under 5 MB.");
-      return;
-    }
+    // No size cap — cloudinaryService downscales oversized photos before upload.
     setUploading(true);
     try {
       const res = await cloudinaryService.uploadImage(file, { folder: "creator_avatars" });
