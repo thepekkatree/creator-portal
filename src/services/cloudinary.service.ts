@@ -1,4 +1,5 @@
 import { config } from "@config/env";
+import { apiClient } from "@/services/api";
 import type { CloudinaryUploadResponse } from "@/types";
 
 export interface UploadProgress {
@@ -9,35 +10,27 @@ export interface UploadProgress {
 
 export interface UploadOptions {
     onProgress?: (progress: UploadProgress) => void;
+    category?: string;
     folder?: string;
     tags?: string[];
+    entity_id?: string;
+    slot?: string;
 }
 
 /** Longest edge, in px, we keep. Comfortably above any display size we render. */
-const MAX_DIMENSION = 2000;
+const MAX_DIMENSION = 1440;
 /** Files at or under this are sent untouched — re-encoding them only loses quality. */
-const COMPRESS_THRESHOLD_BYTES = 1_500_000;
-const JPEG_QUALITY = 0.85;
+const COMPRESS_THRESHOLD_BYTES = 350_000;
+const JPEG_QUALITY = 0.80;
 
 /**
  * Downscale + re-encode an oversized photo before upload.
- *
- * A phone camera JPEG is routinely 8-15 MB, which Cloudinary's unsigned preset
- * rejects outright and which takes minutes to push over mobile data. Shrinking
- * to a sane display size first is what makes uploads land in seconds.
- *
- * Returns the original file untouched on any failure (HEIC and other formats the
- * browser cannot decode, canvas being unavailable, etc.) — a slow upload that
- * might work beats a hard failure here.
  */
 async function compressImage(file: File): Promise<File> {
     if (!file.type.startsWith("image/")) return file;
-    // GIFs would lose animation and SVGs are vectors — never re-encode either.
     if (file.type === "image/gif" || file.type === "image/svg+xml") return file;
 
     try {
-        // `from-image` applies the EXIF rotation phone cameras rely on; without
-        // it, portrait shots upload sideways.
         const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
         const longestEdge = Math.max(bitmap.width, bitmap.height);
         const scale = Math.min(1, MAX_DIMENSION / longestEdge);
@@ -59,13 +52,12 @@ async function compressImage(file: File): Promise<File> {
         bitmap.close();
 
         const blob = await new Promise<Blob | null>((resolve) =>
-            canvas.toBlob(resolve, "image/jpeg", JPEG_QUALITY)
+            canvas.toBlob(resolve, "image/webp", 0.78)
         );
-        // Keep the original if re-encoding somehow made it bigger (small PNGs can).
         if (!blob || blob.size >= file.size) return file;
 
-        return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", {
-            type: "image/jpeg",
+        return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".webp", {
+            type: "image/webp",
             lastModified: Date.now(),
         });
     } catch {
@@ -73,28 +65,71 @@ async function compressImage(file: File): Promise<File> {
     }
 }
 
+/**
+ * Compute SHA-256 hex string for deduplication in S3.
+ */
+async function computeSha256(file: File): Promise<string> {
+    const buffer = await file.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export const cloudinaryService = {
     /**
-     * Upload image to Cloudinary using unsigned upload preset
-     * Note: API Secret is NOT used here - we use unsigned preset for security
+     * Upload image to S3 via backend presigned URL broker.
      */
     async uploadImage(
         file: File,
         options: UploadOptions = {}
     ): Promise<CloudinaryUploadResponse> {
         const upload = await compressImage(file);
+        const category = options.category || options.folder || "quest";
+        const ext = (upload.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+        const contentType = upload.type || "image/jpeg";
 
+        const presignPayload: Record<string, unknown> = {
+            category,
+            content_type: contentType,
+            ext,
+            entity_id: options.entity_id || null,
+        };
+
+        if (options.slot) {
+            presignPayload.slot = options.slot;
+        } else {
+            presignPayload.sha256 = await computeSha256(upload);
+        }
+
+        // 1. Request presigned upload from backend
+        const presignRes = await apiClient.post("/api/v2/media/presign", presignPayload);
+        const { key, url, fields, delivery_url, deduped } = presignRes.data;
+
+        // If deduped, S3 already has this file
+        if (deduped) {
+            if (options.onProgress) {
+                options.onProgress({ loaded: upload.size, total: upload.size, percentage: 100 });
+            }
+            return {
+                public_id: key,
+                secure_url: delivery_url,
+                url: delivery_url,
+                format: ext,
+                width: 0,
+                height: 0,
+                bytes: upload.size,
+                created_at: new Date().toISOString(),
+            };
+        }
+
+        // 2. Perform direct POST to S3 via XHR (to report progress)
         const formData = new FormData();
+        if (fields) {
+            Object.entries(fields).forEach(([k, v]) => {
+                formData.append(k, v as string);
+            });
+        }
         formData.append("file", upload);
-        formData.append("upload_preset", config.cloudinary.uploadPreset);
-
-        if (options.folder) {
-            formData.append("folder", options.folder);
-        }
-
-        if (options.tags && options.tags.length > 0) {
-            formData.append("tags", options.tags.join(","));
-        }
 
         return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
@@ -111,24 +146,18 @@ export const cloudinaryService = {
 
             xhr.addEventListener("load", () => {
                 if (xhr.status >= 200 && xhr.status < 300) {
-                    try {
-                        const response = JSON.parse(xhr.responseText) as CloudinaryUploadResponse;
-                        resolve(response);
-                    } catch {
-                        reject(new Error("Failed to parse upload response"));
-                    }
+                    resolve({
+                        public_id: key,
+                        secure_url: delivery_url,
+                        url: delivery_url,
+                        format: ext,
+                        width: 0,
+                        height: 0,
+                        bytes: upload.size,
+                        created_at: new Date().toISOString(),
+                    });
                 } else {
-                    let errorMessage = `Upload failed with status ${xhr.status}`;
-                    try {
-                        const errorResponse = JSON.parse(xhr.responseText);
-                        if (errorResponse.error && errorResponse.error.message) {
-                            errorMessage = errorResponse.error.message;
-                        }
-                    } catch {
-                        // ignore parse error
-                    }
-                    console.error("Cloudinary error:", xhr.responseText);
-                    reject(new Error(errorMessage));
+                    reject(new Error(`S3 upload failed with status ${xhr.status}`));
                 }
             });
 
@@ -140,16 +169,16 @@ export const cloudinaryService = {
                 reject(new Error("Upload was aborted"));
             });
 
-            xhr.open("POST", config.cloudinary.uploadUrl);
+            xhr.open("POST", url);
             xhr.send(formData);
         });
     },
 
     /**
-     * Generate optimized Cloudinary URL with transformations
+     * Generate delivery URL for S3 / Cloudflare CDN assets
      */
     getOptimizedUrl(
-        publicId: string,
+        publicIdOrUrl: string,
         options: {
             width?: number;
             height?: number;
@@ -158,24 +187,11 @@ export const cloudinaryService = {
             format?: "auto" | "webp" | "jpg" | "png";
         } = {}
     ): string {
-        const {
-            width,
-            height,
-            crop = "fill",
-            quality = "auto",
-            format = "auto",
-        } = options;
-
-        const transformations: string[] = [];
-
-        if (width) transformations.push(`w_${width}`);
-        if (height) transformations.push(`h_${height}`);
-        if (width || height) transformations.push(`c_${crop}`);
-        transformations.push(`q_${quality}`);
-        transformations.push(`f_${format}`);
-
-        const transformString = transformations.join(",");
-
-        return `https://res.cloudinary.com/${config.cloudinary.cloudName}/image/upload/${transformString}/${publicId}`;
+        if (!publicIdOrUrl) return "";
+        if (publicIdOrUrl.startsWith("http://") || publicIdOrUrl.startsWith("https://")) {
+            return publicIdOrUrl;
+        }
+        const deliveryBase = config.media.deliveryBase || "https://img.seekkrr.com";
+        return `${deliveryBase.replace(/\/$/, "")}/${publicIdOrUrl.replace(/^\//, "")}`;
     },
 };
