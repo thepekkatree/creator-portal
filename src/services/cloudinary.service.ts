@@ -1,5 +1,4 @@
-import { config } from "@config/env";
-import { apiClient } from "@/services/api";
+import { api } from "@/services/api";
 import type { CloudinaryUploadResponse } from "@/types";
 
 export interface UploadProgress {
@@ -21,7 +20,6 @@ export interface UploadOptions {
 const MAX_DIMENSION = 1440;
 /** Files at or under this are sent untouched — re-encoding them only loses quality. */
 const COMPRESS_THRESHOLD_BYTES = 350_000;
-const JPEG_QUALITY = 0.80;
 
 /**
  * Downscale + re-encode an oversized photo before upload.
@@ -75,6 +73,8 @@ async function computeSha256(file: File): Promise<string> {
     return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+export const MEDIA_DELIVERY_BASE = "https://img.seekkrr.com";
+
 export const cloudinaryService = {
     /**
      * Upload image to S3 via backend presigned URL broker.
@@ -102,7 +102,7 @@ export const cloudinaryService = {
         }
 
         // 1. Request presigned upload from backend
-        const presignRes = await apiClient.post("/api/v2/media/presign", presignPayload);
+        const presignRes = await api.post("/api/v2/media/presign", presignPayload);
         const { key, url, fields, delivery_url, deduped } = presignRes.data;
 
         // If deduped, S3 already has this file
@@ -114,6 +114,7 @@ export const cloudinaryService = {
                 public_id: key,
                 secure_url: delivery_url,
                 url: delivery_url,
+                resource_type: "image",
                 format: ext,
                 width: 0,
                 height: 0,
@@ -150,6 +151,7 @@ export const cloudinaryService = {
                         public_id: key,
                         secure_url: delivery_url,
                         url: delivery_url,
+                        resource_type: "image",
                         format: ext,
                         width: 0,
                         height: 0,
@@ -179,7 +181,7 @@ export const cloudinaryService = {
      */
     getOptimizedUrl(
         publicIdOrUrl: string,
-        options: {
+        _options: {
             width?: number;
             height?: number;
             crop?: "fill" | "fit" | "scale" | "thumb";
@@ -191,7 +193,6 @@ export const cloudinaryService = {
         if (publicIdOrUrl.startsWith("http://") || publicIdOrUrl.startsWith("https://")) {
             return publicIdOrUrl;
         }
-        const deliveryBase = config.media.deliveryBase || "https://img.seekkrr.com";
-        return `${deliveryBase.replace(/\/$/, "")}/${publicIdOrUrl.replace(/^\//, "")}`;
+        return `${MEDIA_DELIVERY_BASE}/${publicIdOrUrl.replace(/^\//, "")}`;
     },
 };
