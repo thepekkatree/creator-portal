@@ -368,7 +368,7 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
         if (!file) return;
         setUploadingTtdImage(true);
         try {
-            const result = await cloudinaryService.uploadImage(file, { folder: "markers/things-to-do" });
+            const result = await cloudinaryService.uploadImage(file, { category: "marker", folder: "markers/things-to-do" });
             setValue("things_to_do_image_url", result.secure_url, { shouldValidate: true });
         } catch (err) {
             toast.error(err instanceof Error ? err.message : "Failed to upload image");

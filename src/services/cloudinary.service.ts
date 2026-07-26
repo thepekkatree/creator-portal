@@ -84,7 +84,9 @@ export const cloudinaryService = {
         options: UploadOptions = {}
     ): Promise<CloudinaryUploadResponse> {
         const upload = await compressImage(file);
-        const category = options.category || options.folder || "quest";
+        // Normalize folder paths (e.g. "creator-portal/quests") to simple backend category names.
+        const rawCategory = options.category || options.folder || "quest";
+        const category = rawCategory.split("/").pop()?.replace(/s$/, "") || "quest";
         const ext = (upload.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
         const contentType = upload.type || "image/jpeg";
 
