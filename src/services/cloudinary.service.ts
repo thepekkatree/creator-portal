@@ -20,6 +20,29 @@ export interface UploadOptions {
 const MAX_DIMENSION = 1440;
 /** Files at or under this are sent untouched — re-encoding them only loses quality. */
 const COMPRESS_THRESHOLD_BYTES = 350_000;
+/** Hard client-side ceiling on the ORIGINAL file (pre-compression sanity guard). */
+const MAX_INPUT_BYTES = 25 * 1024 * 1024;
+
+/** Backend media categories (mirror of v2 settings.MEDIA_FOLDERS). */
+const VALID_CATEGORIES = new Set([
+    "icons", "logo", "marker", "narrative", "onboarding", "profile", "quest", "region", "website",
+]);
+/** Human-facing folder names → canonical backend category. */
+const CATEGORY_ALIASES: Record<string, string> = {
+    markers: "marker", quests: "quest", narratives: "narrative", regions: "region",
+    avatars: "profile", avatar: "profile", creator_avatars: "profile", profiles: "profile",
+    logos: "logo", "things-to-do": "marker",
+};
+
+/** Resolve a caller-supplied folder/category to a valid backend category, or throw. */
+function resolveCategory(raw: string | undefined): string {
+    const seg = (raw || "quest").split("/").pop()?.toLowerCase().trim() || "quest";
+    if (VALID_CATEGORIES.has(seg)) return seg;
+    if (CATEGORY_ALIASES[seg]) return CATEGORY_ALIASES[seg];
+    const singular = seg.replace(/s$/, "");
+    if (VALID_CATEGORIES.has(singular)) return singular;
+    throw new Error(`Unsupported upload category: "${raw}"`);
+}
 
 /**
  * Downscale + re-encode an oversized photo before upload.
@@ -83,10 +106,20 @@ export const cloudinaryService = {
         file: File,
         options: UploadOptions = {}
     ): Promise<CloudinaryUploadResponse> {
+        // ── Client-side safety guards (fail fast, clear message) ──
+        if (file.type === "image/svg+xml") {
+            throw new Error("SVG images aren't supported for upload.");
+        }
+        if (file.type && !file.type.startsWith("image/")) {
+            throw new Error("Only image files can be uploaded.");
+        }
+        if (file.size > MAX_INPUT_BYTES) {
+            throw new Error("Image is too large (max 25 MB).");
+        }
+        // Resolve category up front so an invalid one is caught before any upload work.
+        const category = resolveCategory(options.category || options.folder);
+
         const upload = await compressImage(file);
-        // Normalize folder paths (e.g. "creator-portal/quests") to simple backend category names.
-        const rawCategory = options.category || options.folder || "quest";
-        const category = rawCategory.split("/").pop()?.replace(/s$/, "") || "quest";
         const ext = (upload.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
         const contentType = upload.type || "image/jpeg";
 
