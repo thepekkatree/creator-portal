@@ -20,7 +20,7 @@ import type { Marker, CreateMarkerPayload } from "@/types";
 interface NearbyConflict {
     existing_marker_id: string;
     existing_title?: string;
-    existing_category?: string;
+    existing_categories?: string[];
     distance_m?: number;
 }
 
@@ -50,7 +50,7 @@ function googleMapsUrl(lat: number, lng: number): string {
  * Mapbox returns free-form strings like "restaurant" / "coffee_shop" / "hotel";
  * anything we don't recognise is left for the creator to pick.
  */
-function toMarkerCategory(mapboxCategory?: string): MarkerFormData["category"] | undefined {
+function toMarkerCategory(mapboxCategory?: string): string | undefined {
     if (!mapboxCategory) return undefined;
     const c = mapboxCategory.toLowerCase();
     const match = (...needles: string[]) => needles.some((n) => c.includes(n));
@@ -76,11 +76,8 @@ interface MarkerFormModalProps {
 function markerToFormData(m: Marker): Partial<MarkerFormData> {
     return {
         title: m.title,
-        // Legacy/unknown categories aren't in the canonical list — drop to empty so
-        // the creator picks a valid one from the dropdown before saving.
-        category: (MARKER_CATEGORIES as readonly string[]).includes(m.category ?? "")
-            ? (m.category as MarkerFormData["category"])
-            : "",
+        categories: m.categories ?? [],
+        sub_categories: m.sub_categories ?? [],
         description: m.description ?? "",
         address: m.address ?? "",
         contact: m.contact ?? "",
@@ -102,7 +99,8 @@ function markerToFormData(m: Marker): Partial<MarkerFormData> {
 
 const DEFAULT_VALUES: Partial<MarkerFormData> = {
     title: "",
-    category: "",
+    categories: [],
+    sub_categories: [],
     description: "",
     address: "",
     contact: "",
@@ -252,9 +250,9 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
                 filled.push("title");
             }
             const category = toMarkerCategory(place.category);
-            if (category && !getValues("category")) {
-                setValue("category", category, { shouldValidate: true });
-                filled.push("category");
+            if (category && getValues("categories").length === 0) {
+                setValue("categories", [category], { shouldValidate: true });
+                filled.push("categories");
             }
 
             if (filled.length > 0) {
@@ -299,7 +297,7 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
                 setNearbyConflict({
                     existing_marker_id: String(d.existing_marker_id),
                     existing_title: typeof d.existing_title === "string" ? d.existing_title : undefined,
-                    existing_category: typeof d.existing_category === "string" ? d.existing_category : undefined,
+                    existing_categories: Array.isArray(d.existing_categories) ? d.existing_categories : undefined,
                     distance_m: typeof d.distance_m === "number" ? d.distance_m : undefined,
                 });
                 setPendingPayload(payload);
@@ -493,20 +491,34 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
                                         </p>
                                     )}
                                 </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-neutral-700 mb-1">
+                                        Categories
+                                    </label>
+                                    <div className="flex flex-wrap gap-2 p-3 border border-neutral-300 rounded-lg max-h-32 overflow-y-auto bg-white">
+                                        {MARKER_CATEGORIES.map((c) => (
+                                            <label key={c} className="flex items-center gap-2 text-sm bg-neutral-50 px-2 py-1 rounded-md cursor-pointer hover:bg-neutral-100">
+                                                <input
+                                                    type="checkbox"
+                                                    value={c}
+                                                    {...register("categories")}
+                                                    className="rounded border-neutral-300 text-primary-600 focus:ring-primary-500"
+                                                />
+                                                {c}
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
 
                                 <div>
                                     <label className="block text-sm font-medium text-neutral-700 mb-1">
-                                        Category
+                                        Subcategories (comma-separated)
                                     </label>
-                                    <select
-                                        {...register("category")}
-                                        className="w-full px-4 py-2.5 bg-white border border-neutral-300 rounded-lg text-neutral-900 text-sm focus:outline-none focus:ring-2 focus:ring-primary-200 focus:border-primary-500"
-                                    >
-                                        <option value="">Select a category…</option>
-                                        {MARKER_CATEGORIES.map((c) => (
-                                            <option key={c} value={c}>{c}</option>
-                                        ))}
-                                    </select>
+                                    <Input
+                                        value={watch("sub_categories").join(", ")}
+                                        onChange={(e) => setValue("sub_categories", e.target.value.split(",").map(s => s.trim()).filter(Boolean), { shouldValidate: true })}
+                                        placeholder="e.g. Hiking, Sightseeing"
+                                    />
                                 </div>
 
                                 <div>
@@ -858,7 +870,7 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
                                         <span className="font-semibold text-neutral-900">
                                             {nearbyConflict.existing_title || "An existing marker"}
                                         </span>
-                                        {nearbyConflict.existing_category ? ` (${nearbyConflict.existing_category})` : ""}
+                                        {nearbyConflict.existing_categories && nearbyConflict.existing_categories.length > 0 ? ` (${nearbyConflict.existing_categories.join(", ")})` : ""}
                                         {" is "}
                                         {nearbyConflict.distance_m !== undefined && nearbyConflict.distance_m !== null
                                             ? `~${nearbyConflict.distance_m}m`

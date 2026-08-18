@@ -197,8 +197,8 @@ export function AttachTargetSelect({
                                         }`}
                                     >
                                         {m.title}
-                                        {m.category && (
-                                            <span className="ml-2 text-xs text-neutral-400">{m.category}</span>
+                                        {(m.categories && m.categories.length > 0) && (
+                                            <span className="ml-2 text-xs text-neutral-400">{m.categories.join(", ")}</span>
                                         )}
                                     </button>
                                 ))

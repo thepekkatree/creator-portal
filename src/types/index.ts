@@ -370,7 +370,8 @@ export interface QuestStartPoint {
 export interface QuestMarkerSummary {
     marker_id: string;
     name: string | null;
-    category: string | null;
+    categories?: string[];
+    sub_categories?: string[];
     tags: string[];
     images: string[];
     images_blurred?: boolean;
@@ -436,7 +437,8 @@ export type QuestAssetInput = Record<string, string>;
 export interface InlineMarkerInput {
     title: string;
     location: GeoPoint;
-    category?: string;
+    categories?: string[];
+    sub_categories?: string[];
     description?: string;
     address?: string;
 }
@@ -503,7 +505,8 @@ export interface Marker {
     id: string;
     location: GeoPoint;
     title: string;
-    category: string | null;
+    categories: string[];
+    sub_categories: string[];
     description: string | null;
     media: string[] | null;
     tags: string[] | null;
@@ -534,7 +537,8 @@ export interface Marker {
 export interface CreateMarkerPayload {
     title: string;
     location: GeoPoint;
-    category?: string;
+    categories?: string[];
+    sub_categories?: string[];
     description?: string;
     address?: string;
     map_url?: string;

@@ -21,7 +21,8 @@ export const MARKER_CATEGORIES = [
 
 export const markerFormSchema = z.object({
     title: z.string().min(1, "Title is required").max(300),
-    category: z.enum(MARKER_CATEGORIES).optional().or(z.literal("")),
+    categories: z.array(z.string()).default([]),
+    sub_categories: z.array(z.string()).default([]),
     description: z.string().max(2000).optional().or(z.literal("")),
     address: z.string().max(500).optional().or(z.literal("")),
     contact: z.string().max(100).optional().or(z.literal("")),
@@ -48,7 +49,7 @@ const clean = <T extends Record<string, unknown>>(o: T): Partial<T> =>
 export function toCreatePayload(d: MarkerFormData): CreateMarkerPayload {
     return {
         ...clean({
-            title: d.title, category: d.category, description: d.description, address: d.address,
+            title: d.title, description: d.description, address: d.address,
             contact: d.contact, website_url: d.website_url, map_url: d.map_url,
             things_to_do_text: d.things_to_do_text, things_to_do_image_url: d.things_to_do_image_url,
             min_expense: d.min_expense, max_expense: d.max_expense, region_id: d.region_id,
@@ -56,6 +57,8 @@ export function toCreatePayload(d: MarkerFormData): CreateMarkerPayload {
         }),
         title: d.title,
         location: { type: "Point", coordinates: [d.longitude, d.latitude] },
+        categories: d.categories.length > 0 ? d.categories : undefined,
+        sub_categories: d.sub_categories.length > 0 ? d.sub_categories : undefined,
         tags: d.tags,
         media: d.media,
     } as CreateMarkerPayload;

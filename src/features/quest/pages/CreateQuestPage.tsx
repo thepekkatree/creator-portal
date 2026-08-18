@@ -223,7 +223,8 @@ export function CreateQuestPage() {
         new_marker: {
           title: nm.title,
           location: { type: "Point", coordinates: [nm.longitude, nm.latitude] },
-          ...(nm.category ? { category: nm.category } : {}),
+          ...(nm.categories ? { categories: nm.categories } : {}),
+          ...(nm.sub_categories ? { sub_categories: nm.sub_categories } : {}),
           ...(nm.description ? { description: nm.description } : {}),
           ...(nm.address ? { address: nm.address } : {}),
         },

@@ -431,9 +431,9 @@ export function QuestDetailPage() {
                       {expandedSteps.has(i) && (
                         <div className="px-4 sm:px-5 pb-5 pt-0 sm:pl-16 animate-slide-down">
                           <div className="hidden sm:block w-px h-full bg-neutral-100 absolute left-[35px] top-[60px]" />
-                          {marker.category && (
+                          {(marker.categories && marker.categories.length > 0) && (
                             <div className="inline-flex items-center gap-1.5 mb-3 px-2 py-1 rounded bg-neutral-50 text-neutral-600 text-xs font-semibold">
-                              <Navigation className="w-3.5 h-3.5 text-primary-400" /> {marker.category}
+                              <Navigation className="w-3.5 h-3.5 text-primary-400" /> {marker.categories.join(", ")}
                             </div>
                           )}
                           {marker.things_to_do_text && (

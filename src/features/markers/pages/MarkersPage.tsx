@@ -301,7 +301,7 @@ export function MarkersPage() {
                                                 {title}
                                             </td>
                                             <td className="py-4 px-6 text-sm text-neutral-500 truncate">
-                                                {marker.category ?? "—"}
+                                                {(marker.categories && marker.categories.length > 0) ? marker.categories.join(", ") : "—"}
                                             </td>
                                             <td className="py-4 px-6 text-center">
                                                 <div className="inline-flex items-center gap-1.5">

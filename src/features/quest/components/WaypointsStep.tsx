@@ -226,7 +226,7 @@ export function WaypointsStep({ defaultValues, onNext, onBack, onRegionChange }:
 
     // ─── Add: NEW marker candidate (with 20m dedupe → auto-reuse) ────────────
     const addNewMarkerCandidate = useCallback(
-        (lng: number, lat: number, title: string, category?: string, address?: string) => {
+        (lng: number, lat: number, title: string, categories?: string[], address?: string) => {
             const current = getPlaylist();
 
             // 20m dedupe against loaded existing markers (mirrors the backend).
@@ -261,7 +261,7 @@ export function WaypointsStep({ defaultValues, onNext, onBack, onRegionChange }:
                     title,
                     longitude: lng,
                     latitude: lat,
-                    category: category || undefined,
+                    categories: categories || undefined,
                     address: address || undefined,
                 },
                 is_required: true,
@@ -279,7 +279,7 @@ export function WaypointsStep({ defaultValues, onNext, onBack, onRegionChange }:
                 loc.longitude,
                 loc.latitude,
                 loc.place_name,
-                loc.category,
+                loc.category ? [loc.category] : undefined,
                 loc.address
             );
         },
@@ -516,10 +516,10 @@ export function WaypointsStep({ defaultValues, onNext, onBack, onRegionChange }:
                                                         <span className="text-sm font-medium text-neutral-900 block truncate">
                                                             {m.title}
                                                         </span>
-                                                        {(m.category || m.address) && (
-                                                            <span className="text-xs text-neutral-500 block truncate">
-                                                                {[m.category, m.address].filter(Boolean).join(" · ")}
-                                                            </span>
+                                                        {(m.categories || m.address) && (
+                                                            <p className="text-xs text-neutral-500 mt-1 line-clamp-1">
+                                                                {[(m.categories && m.categories.length > 0) ? m.categories.join(", ") : undefined, m.address].filter(Boolean).join(" · ")}
+                                                            </p>
                                                         )}
                                                     </div>
                                                     {already ? (

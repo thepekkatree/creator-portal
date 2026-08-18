@@ -93,7 +93,8 @@ export const inlineNewMarkerSchema = z.object({
     title: z.string().min(1, "Marker title is required"),
     longitude: z.number().min(-180).max(180),
     latitude: z.number().min(-90).max(90),
-    category: z.string().optional(),
+    categories: z.array(z.string()).optional(),
+    sub_categories: z.array(z.string()).optional(),
     description: z.string().optional(),
     address: z.string().optional(),
 });

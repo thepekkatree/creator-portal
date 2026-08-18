@@ -127,8 +127,8 @@ export function MarkerDetailPage() {
                             )}
                         </div>
                         <h1 className="text-2xl font-display font-bold text-primary-900 tracking-tight mt-1">{marker.title}</h1>
-                        {marker.category && (
-                            <p className="text-sm text-neutral-500 mt-1">{marker.category}</p>
+                        {(marker.categories && marker.categories.length > 0) && (
+                            <p className="text-sm text-neutral-500 mt-1">{marker.categories.join(", ")}</p>
                         )}
                     </div>
                     <div className="text-xs text-neutral-400 flex-shrink-0 sm:text-right">

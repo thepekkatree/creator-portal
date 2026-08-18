@@ -121,8 +121,8 @@ export function MarkerSelect({ value, onChange, disabled = false, error }: Marke
                                     >
                                         <MapPin className="w-3.5 h-3.5 text-primary-400 shrink-0" />
                                         <span className="truncate">{marker.title}</span>
-                                        {marker.category && (
-                                            <span className="ml-auto text-xs text-neutral-400 shrink-0">{marker.category}</span>
+                                        {(marker.categories && marker.categories.length > 0) && (
+                                            <span className="ml-auto text-xs text-neutral-400 shrink-0">{marker.categories.join(", ")}</span>
                                         )}
                                     </button>
                                 </li>
