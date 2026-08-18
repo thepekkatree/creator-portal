@@ -12,9 +12,10 @@ import { cloudinaryService } from "@services/cloudinary.service";
 import { MarkerMapPicker } from "./MarkerMapPicker";
 import type { LngLat, ResolvedPlace } from "./MarkerMapPicker";
 import { MarkerRegionSelect } from "./MarkerRegionSelect";
-import { markerFormSchema, toCreatePayload, toUpdatePayload, MARKER_CATEGORIES } from "../schemas/marker.schema";
+import { markerFormSchema, toCreatePayload, toUpdatePayload } from "../schemas/marker.schema";
 import type { MarkerFormData } from "../schemas/marker.schema";
 import type { Marker, CreateMarkerPayload } from "@/types";
+import { categoryService } from "@/services/category.service";
 
 /** Details the backend returns with a 409 NEARBY_MARKER conflict. */
 interface NearbyConflict {
@@ -137,6 +138,12 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
         staleTime: 5 * 60_000,
         // Only run when in create mode and the modal is open
         enabled: mode === "create" && open,
+    });
+
+    const { data: dbCategories = [] } = useQuery({
+        queryKey: ["categories"],
+        queryFn: () => categoryService.getCategories(),
+        staleTime: 5 * 60_000,
     });
 
     // Derive the most recent marker's center (backend returns newest-first by default).
@@ -496,30 +503,49 @@ export function MarkerFormModal({ open, mode, initial, onClose, onSaved }: Marke
                                         Categories
                                     </label>
                                     <div className="flex flex-wrap gap-2 p-3 border border-neutral-300 rounded-lg max-h-32 overflow-y-auto bg-white">
-                                        {MARKER_CATEGORIES.map((c) => (
-                                            <label key={c} className="flex items-center gap-2 text-sm bg-neutral-50 px-2 py-1 rounded-md cursor-pointer hover:bg-neutral-100">
+                                        {dbCategories.map((c) => (
+                                            <label key={c.id} className="flex items-center gap-2 text-sm bg-neutral-50 px-2 py-1 rounded-md cursor-pointer hover:bg-neutral-100">
                                                 <input
                                                     type="checkbox"
-                                                    value={c}
+                                                    value={c.name}
                                                     {...register("categories")}
                                                     className="rounded border-neutral-300 text-primary-600 focus:ring-primary-500"
                                                 />
-                                                {c}
+                                                {c.name}
+                                            </label>
+                                        ))}
+                                    </div>
+                                    {errors.categories && (
+                                        <p className="mt-1 text-xs text-red-600 flex items-center gap-1">
+                                            <AlertTriangle className="w-3 h-3" /> {errors.categories.message}
+                                        </p>
+                                    )}
+                                </div>
+
+                                {watch("categories").length > 0 && (
+                                <div>
+                                    <label className="block text-sm font-medium text-neutral-700 mb-1">
+                                        Subcategories
+                                    </label>
+                                    <div className="flex flex-wrap gap-2 p-3 border border-neutral-300 rounded-lg max-h-32 overflow-y-auto bg-white">
+                                        {dbCategories
+                                            .filter(c => watch("categories").includes(c.name))
+                                            .flatMap(c => c.sub_categories)
+                                            .filter((sub, index, self) => self.indexOf(sub) === index)
+                                            .map((sub) => (
+                                            <label key={sub} className="flex items-center gap-2 text-sm bg-neutral-50 px-2 py-1 rounded-md cursor-pointer hover:bg-neutral-100">
+                                                <input
+                                                    type="checkbox"
+                                                    value={sub}
+                                                    {...register("sub_categories")}
+                                                    className="rounded border-neutral-300 text-primary-600 focus:ring-primary-500"
+                                                />
+                                                {sub}
                                             </label>
                                         ))}
                                     </div>
                                 </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-neutral-700 mb-1">
-                                        Subcategories (comma-separated)
-                                    </label>
-                                    <Input
-                                        value={watch("sub_categories").join(", ")}
-                                        onChange={(e) => setValue("sub_categories", e.target.value.split(",").map(s => s.trim()).filter(Boolean), { shouldValidate: true })}
-                                        placeholder="e.g. Hiking, Sightseeing"
-                                    />
-                                </div>
+                                )}
 
                                 <div>
                                     <label className="block text-sm font-medium text-neutral-700 mb-1">

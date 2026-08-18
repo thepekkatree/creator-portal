@@ -21,7 +21,7 @@ export const MARKER_CATEGORIES = [
 
 export const markerFormSchema = z.object({
     title: z.string().min(1, "Title is required").max(300),
-    categories: z.array(z.string()).default([]),
+    categories: z.array(z.string()).max(3, "Select up to 3 categories").default([]),
     sub_categories: z.array(z.string()).default([]),
     description: z.string().max(2000).optional().or(z.literal("")),
     address: z.string().max(500).optional().or(z.literal("")),
